@@ -49,10 +49,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Setup Vcpkg
-      uses: run-vcpkg/action-setup-vcpkg@v10
+      uses: lukka/run-vcpkg@v11
       with:
-        pkgs: libvpx libyuv opus aom
-        triplet: x64-windows-static-md
+        # Just setup vcpkg, don't run install from manifest yet
+        setupOnly: true
+    - name: Install Dependencies
+      shell: pwsh
+      run: |
+        $vcpkg = "$env:VCPKG_ROOT/vcpkg"
+        & $vcpkg install libvpx libyuv opus aom --triplet x64-windows-static-md
     - name: Download Sciter
       shell: powershell
       run: |
