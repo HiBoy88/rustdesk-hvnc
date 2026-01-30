@@ -11,6 +11,11 @@ use crate::{Key, KeyboardControllable, MouseButton, MouseControllable};
 use std::mem::*;
 use std::ptr;
 
+// 补充拖拽需要的 WinAPI 常量
+const SWP_NOSIZE: UINT = 0x0001;
+const SWP_NOZORDER: UINT = 0x0004;
+const SWP_NOACTIVATE: UINT = 0x0010;
+
 extern "system" {
     pub fn GetLastError() -> DWORD;
 }
@@ -83,122 +88,101 @@ fn lparam_from_point(point: POINT) -> isize {
 }
 
 fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
-    // let mut u = INPUT_u::default();
-    // unsafe {
-    //     *u.mi_mut() = MOUSEINPUT {
-    //         dx,
-    //         dy,
-    //         mouseData: data,
-    //         dwFlags: flags,
-    //         time: 0,
-    //         dwExtraInfo: ENIGO_INPUT_EXTRA_VALUE,
-    //     };
-    // }
-    // let mut input = INPUT {
-    //     type_: INPUT_MOUSE,
-    //     u,
-    // };
-    // unsafe { SendInput(1, &mut input as LPINPUT, size_of::<INPUT>() as c_int) }
-
     const MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+
+    const HTCLIENT: isize = 1;
+    const HTCAPTION: isize = 2;
+    const HTLEFT: isize = 10;
+    const HTRIGHT: isize = 11;
+    const HTTOP: isize = 12;
+    const HTTOPLEFT: isize = 13;
+    const HTTOPRIGHT: isize = 14;
+    const HTBOTTOM: isize = 15;
+    const HTBOTTOMLEFT: isize = 16;
+    const HTBOTTOMRIGHT: isize = 17;
+
     unsafe {
         match flags {
             MOVE => {
+                let last_x = X;
+                let last_y = Y;
                 X = dx;
                 Y = dy;
 
-                // if !MOUSE_DOWN {
-                //     return 1;
-                // }
+                if MOUSE_DOWN && MOVE_WINDOW != 0 as HWND {
+                    let wnd = MOVE_WINDOW;
+                    let delta_x = X - last_x;
+                    let delta_y = Y - last_y;
 
-                // let wnd = MOVE_WINDOW;
+                    let mut rect: RECT = zeroed();
+                    GetWindowRect(wnd, &mut rect);
 
-                // let move_x = LAST_POINT.0 - dx;
-                // let move_y = LAST_POINT.1 - dy;
+                    let mut wx = rect.left;
+                    let mut wy = rect.top;
+                    let mut width = rect.right - rect.left;
+                    let mut height = rect.bottom - rect.top;
 
-                // // println!("{move_x} {move_y}");
+                    match MOVE_WINDOW_TYP {
+                        HTCAPTION => {
+                            wx += delta_x;
+                            wy += delta_y;
+                        }
+                        HTTOP => {
+                            wy += delta_y;
+                            height -= delta_y;
+                        }
+                        HTBOTTOM => {
+                            height += delta_y;
+                        }
+                        HTLEFT => {
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTRIGHT => {
+                            width += delta_x;
+                        }
+                        HTTOPLEFT => {
+                            wy += delta_y;
+                            height -= delta_y;
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTTOPRIGHT => {
+                            wy += delta_y;
+                            height -= delta_y;
+                            width += delta_x;
+                        }
+                        HTBOTTOMLEFT => {
+                            height += delta_y;
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTBOTTOMRIGHT => {
+                            height += delta_y;
+                            width += delta_x;
+                        }
+                        _ => {}
+                    }
 
-                // let mut rect: RECT = zeroed();
-                // GetWindowRect(wnd, &mut rect);
-
-                // let mut wx = rect.left;
-                // let mut wy = rect.top;
-                // let mut width = rect.right - rect.left;
-                // let mut height = rect.bottom - rect.top;
-
-                // // wx -= move_x;
-                // //         wy -= move_y;
-                // if MOVE_WINDOW_TYP == HTCAPTION {
-                //     wx = dx;
-                //     wy = dy;
-                // }
-
-                // match MOVE_WINDOW_TYP {
-                //     HICAPTION => {
-                //         wx -= move_x;
-                //         wy -= move_y;
-                //     }
-
-                //     HTTOP => {
-                //         wy -= move_y;
-                //         height += move_y;
-                //     }
-
-                //     HTBOTTOM => {
-                //         height -= move_y;
-
-                //     }
-
-                //     HTLEFT => {
-                //         wx -= move_x;
-                //         width += move_x;
-                //     }
-
-                //     HIRIGHT => {
-
-                //         width -= move_x;
-                //     }
-
-                //     HTTOPLEFT => {
-                //         wy -= move_y;
-                //         height += move_y;
-                //         wx -= move_x;
-                //         width -= move_x;
-                //     }
-
-                //     HTTIOLEFT => {
-                //         wy -= move_y;
-                //         height += move_y;
-                //         width -= move_x;
-                //     }
-
-                //     HTBOTTOMLEFT => {
-                //         height -= move_y;
-                //         wx -= move_x;
-                //         width += move_x;
-                //     }
-
-                //     HTBOTTOMRIGHT => {
-
-                //         height -= move_y;
-                //         width -= move_x;
-                //     }
-
-                //     _ => {}
-
-                // }
-
-                // MoveWindow(wnd, wx, wy, width, height, 0);
-                // // MOVE_WINDOW = wnd;
-
-                // LAST_POINT = (dx, dy);
+                    if MOVE_WINDOW_TYP != HTCLIENT {
+                        SetWindowPos(
+                            wnd,
+                            0 as _,
+                            wx,
+                            wy,
+                            width,
+                            height,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                }
             }
             _ => {
                 let mut point = POINT { x: X, y: Y };
                 let mut wnd = WindowFromPoint(point);
                 let screen_lparam = lparam_from_point(point);
 
-                let mut curr_wnd = wnd;
+                let mut curr_wnd;
                 let mut client_wnd = wnd;
                 loop {
                     curr_wnd = client_wnd;
@@ -209,82 +193,70 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                     }
                 }
 
-                GLOBAL_WND = wnd;
+                if client_wnd.is_null() {
+                    client_wnd = wnd;
+                }
 
+                let mut root = wnd;
+                loop {
+                    let parent = GetParent(root);
+                    if parent.is_null() {
+                        break;
+                    }
+                    root = parent;
+                }
+
+                GLOBAL_WND = wnd;
                 let client_lparam = lparam_from_point(point);
 
                 match flags {
                     MOUSEEVENTF_LEFTDOWN => {
                         MOUSE_DOWN = true;
-                        MOVE_WINDOW = wnd;
-                        println!("set move window {}", print_wnd_name(wnd));
-                        // MOVE_WINDOW_TYP = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
 
-                        let start_button = FindWindowA("Button\0".as_ptr() as _, ptr::null());
-                        let mut rect: RECT = zeroed();
-                        GetWindowRect(start_button, &mut rect);
+                        let hit_test = SendMessageA(root, WM_NCHITTEST, 0, screen_lparam);
 
-                        if PtInRect(&rect, POINT { x: X, y: Y }) != 0 {
-                            PostMessageA(start_button, BM_CLICK, 0, 0);
-                        } else {
-                            let mut cls = [0_u8; 256];
-                            RealGetWindowClassA(wnd, cls.as_mut_ptr() as _, 256);
-                            
-                            if cls.starts_with(&[b'#', b'3', b'2', b'7', b'6', b'8']) {
-                                let menu = SendMessageA(wnd, MN_GETHMENU, 0, 0);
-                                let item_pos = MenuItemFromPoint(
-                                    ptr::null_mut(),
-                                    menu as _,
-                                    POINT { x: X, y: Y },
-                                );
-                                // let item_id = GetMenuItemID(menu as _, item_pos);
-                                PostMessageA(wnd, 0x1e5, item_pos as _, 0);
-                                PostMessageA(wnd, WM_KEYDOWN, VK_RETURN as _, 0);
+                        if hit_test == HTCLIENT {
+                            MOVE_WINDOW = 0 as HWND;
+
+                            SetForegroundWindow(root);
+
+                            let start_button = FindWindowA("Button\0".as_ptr() as _, ptr::null());
+                            let mut rect: RECT = zeroed();
+                            GetWindowRect(start_button, &mut rect);
+                            if PtInRect(&rect, POINT { x: X, y: Y }) != 0 {
+                                PostMessageA(start_button, BM_CLICK, 0, 0);
+                                return 1;
                             }
-                        }
 
-                        // I don't know why
-                        let lparam = if wnd_cls_name(wnd) == "SysTreeView32" {
-                            screen_lparam
+                            if is_dbl_clk(MOUSEEVENTF_LEFTDOWN, X, Y) {
+                                PostMessageA(
+                                    client_wnd,
+                                    WM_LBUTTONDBLCLK,
+                                    MK_LBUTTON,
+                                    client_lparam,
+                                );
+                                LAST_MOUSE_DOWN = 0;
+                                LAST_MOUSE_DOWN_X_Y = (0, 0);
+                            } else {
+                                PostMessageA(client_wnd, WM_LBUTTONDOWN, MK_LBUTTON, client_lparam);
+                                LAST_MOUSE_DOWN = MOUSEEVENTF_LEFTDOWN;
+                                LAST_MOUSE_DOWN_X_Y = (X, Y);
+                            }
                         } else {
-                            client_lparam
-                        };
-                        if is_dbl_clk(MOUSEEVENTF_LEFTDOWN, point.x, point.y) {
-                            PostMessageA(client_wnd, WM_LBUTTONDBLCLK, MK_LBUTTON, lparam);
-                            LAST_MOUSE_DOWN = 0;
-                            LAST_MOUSE_DOWN_X_Y = (0, 0);
-                        } else {
-                            println!("click {}", wnd_cls_name(wnd));
-                            PostMessageA(client_wnd, WM_LBUTTONDOWN, 0, lparam);
-                            LAST_MOUSE_DOWN = MOUSEEVENTF_LEFTDOWN;
-                            LAST_MOUSE_DOWN_X_Y = (point.x, point.y);
+                            MOVE_WINDOW = root;
+                            MOVE_WINDOW_TYP = hit_test;
+                            SetForegroundWindow(root);
                         }
-                    }
-                    MOUSEEVENTF_MIDDLEDOWN => {
-                        PostMessageA(client_wnd, WM_MBUTTONDOWN, MK_MBUTTON, client_lparam);
-                    }
-                    MOUSEEVENTF_RIGHTDOWN => {
-                        PostMessageA(client_wnd, WM_RBUTTONDOWN, MK_RBUTTON, client_lparam);
-                    }
-                    MOUSEEVENTF_XDOWN => {
-                        PostMessageA(client_wnd, WM_MOUSEWHEEL, MK_RBUTTON, client_lparam);
                     }
                     MOUSEEVENTF_LEFTUP => {
                         MOUSE_DOWN = false;
                         MOVE_WINDOW = 0 as _;
 
+                        PostMessageA(client_wnd, WM_LBUTTONUP, 0, client_lparam);
+
                         if wnd_cls_name(wnd) != "SysTreeView32" {
                             let ret = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
                             match ret {
-                                HTTRANSPARENT => {
-                                    SetWindowLongPtrA(
-                                        wnd,
-                                        GWL_STYLE,
-                                        GetWindowLongA(wnd, GWL_STYLE) as isize
-                                            | WS_DISABLED as isize,
-                                    );
-                                    SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
-                                }
                                 HTCLOSE => {
                                     PostMessageA(wnd, WM_CLOSE, 0, 0);
                                 }
@@ -295,31 +267,245 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                                     let mut placement: WINDOWPLACEMENT = zeroed();
                                     placement.length = size_of::<WINDOWPLACEMENT>() as _;
                                     GetWindowPlacement(wnd, &mut placement);
-
                                     if placement.flags as i32 & SW_SHOWMAXIMIZED != 0 {
                                         PostMessageA(wnd, WM_SYSCOMMAND, SC_RESTORE, 0);
                                     } else {
                                         PostMessageA(wnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
                                     }
                                 }
-                                _ => {
-                                    if ret != 0 {
-                                        PostMessageA(wnd, WM_ACTIVATE, WA_ACTIVE as _, 0);
-                                        PostMessageA(wnd, WM_SETFOCUS, 0, 0);
-                                    }
-                                }
+                                _ => {}
                             }
                         }
-
-                        PostMessageA(client_wnd, WM_LBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_MIDDLEDOWN => {
+                        PostMessageA(client_wnd, WM_MBUTTONDOWN, MK_MBUTTON, client_lparam);
                     }
                     MOUSEEVENTF_MIDDLEUP => {
                         PostMessageA(client_wnd, WM_MBUTTONUP, 0, client_lparam);
                     }
+                    MOUSEEVENTF_RIGHTDOWN => {
+                        SetForegroundWindow(root);
+                        PostMessageA(client_wnd, WM_RBUTTONDOWN, MK_RBUTTON, client_lparam);
+                    }
                     MOUSEEVENTF_RIGHTUP => {
                         PostMessageA(client_wnd, WM_RBUTTONUP, 0, client_lparam);
                     }
-                    MOUSEEVENTF_XUP => {}
+                    MOUSEEVENTF_XDOWN => {
+                        PostMessageA(client_wnd, WM_MOUSEWHEEL, MK_RBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_HWHEEL => {
+                        PostMessageA(
+                            client_wnd,
+                            WM_MOUSEHWHEEL,
+                            (data << 16) as usize,
+                            screen_lparam,
+                        );
+                    }
+                    MOUSEEVENTF_WHEEL => {
+                        PostMessageA(
+                            client_wnd,
+                            WM_MOUSEWHEEL,
+                            (data << 16) as usize,
+                            screen_lparam,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+                        HTTOP => {
+                            wy += delta_y;
+                            height -= delta_y;
+                        }
+                        HTBOTTOM => {
+                            height += delta_y;
+                        }
+                        HTLEFT => {
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTRIGHT => {
+                            width += delta_x;
+                        }
+                        HTTOPLEFT => {
+                            wy += delta_y;
+                            height -= delta_y;
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTTOPRIGHT => {
+                            wy += delta_y;
+                            height -= delta_y;
+                            width += delta_x;
+                        }
+                        HTBOTTOMLEFT => {
+                            height += delta_y;
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTBOTTOMRIGHT => {
+                            height += delta_y;
+                            width += delta_x;
+                        }
+                        _ => {}
+                    }
+
+                    if MOVE_WINDOW_TYP != HTCLIENT {
+                        SetWindowPos(
+                            wnd,
+                            0 as _,
+                            wx,
+                            wy,
+                            width,
+                            height,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+            }
+            _ => {
+                let mut point = POINT { x: X, y: Y };
+                // Find the window under mouse
+                let mut wnd = WindowFromPoint(point);
+                let screen_lparam = lparam_from_point(point);
+
+                // Traverse down to the deepest child window
+                let mut curr_wnd;
+                let mut client_wnd = wnd;
+                loop {
+                    curr_wnd = client_wnd;
+                    ScreenToClient(curr_wnd, &mut point);
+                    client_wnd = ChildWindowFromPoint(client_wnd, point);
+                    if client_wnd == curr_wnd || client_wnd.is_null() {
+                        break;
+                    }
+                }
+
+                // Fallback: Use the window returned by WindowFromPoint if traversal failed weirdly
+                if client_wnd.is_null() {
+                    client_wnd = wnd;
+                } else {
+                    // Update wnd to the actual top-level or control found,
+                    // but for dragging we usually want the top-level parent of the control
+                    // However, let's keep logic simple: wnd is Top Level, client_wnd is target
+                }
+
+                // If we found a child, we might want to ensure 'wnd' is the real top-level parent for dragging
+                let mut root = wnd;
+                loop {
+                    let parent = GetParent(root);
+                    if parent.is_null() {
+                        break;
+                    }
+                    root = parent;
+                }
+                // Only update global wnd if it's different, to avoid messing up state
+                // Actually, let's stick to using 'wnd' as the one we clicked
+
+                GLOBAL_WND = wnd;
+                let client_lparam = lparam_from_point(point);
+
+                match flags {
+                    MOUSEEVENTF_LEFTDOWN => {
+                        MOUSE_DOWN = true;
+
+                        // Hit Test on the ROOT window (for dragging/resizing)
+                        let hit_test = SendMessageA(root, WM_NCHITTEST, 0, screen_lparam);
+
+                        if hit_test == HTCLIENT {
+                            // Normal Click on Client Area
+                            MOVE_WINDOW = 0 as HWND; // Not dragging
+
+                            // 1. Focus the window (Important for CMD/Input)
+                            SetForegroundWindow(root);
+
+                            // 2. Handle Start Button special case
+                            let start_button = FindWindowA("Button\0".as_ptr() as _, ptr::null());
+                            let mut rect: RECT = zeroed();
+                            GetWindowRect(start_button, &mut rect);
+                            if PtInRect(&rect, POINT { x: X, y: Y }) != 0 {
+                                PostMessageA(start_button, BM_CLICK, 0, 0);
+                                return 1;
+                            }
+
+                            // 3. Send Click
+                            // Special handling for double clicks
+                            if is_dbl_clk(MOUSEEVENTF_LEFTDOWN, X, Y) {
+                                PostMessageA(
+                                    client_wnd,
+                                    WM_LBUTTONDBLCLK,
+                                    MK_LBUTTON,
+                                    client_lparam,
+                                );
+                                LAST_MOUSE_DOWN = 0;
+                                LAST_MOUSE_DOWN_X_Y = (0, 0);
+                            } else {
+                                PostMessageA(client_wnd, WM_LBUTTONDOWN, MK_LBUTTON, client_lparam);
+                                LAST_MOUSE_DOWN = MOUSEEVENTF_LEFTDOWN;
+                                LAST_MOUSE_DOWN_X_Y = (X, Y);
+                            }
+                        } else {
+                            // Non-Client Area (Title bar, borders) -> Start Dragging/Resizing
+                            MOVE_WINDOW = root;
+                            MOVE_WINDOW_TYP = hit_test;
+                            // Also focus it
+                            SetForegroundWindow(root);
+                            // We don't send WM_LBUTTONDOWN to client_wnd here,
+                            // Windows handles NC clicks automatically usually,
+                            // but since we are blocking input, we handle drag manually in MOVE event.
+                        }
+                    }
+                    MOUSEEVENTF_LEFTUP => {
+                        MOUSE_DOWN = false;
+                        MOVE_WINDOW = 0 as _; // Stop dragging
+
+                        // Always send UP to the client window to finish any click
+                        PostMessageA(client_wnd, WM_LBUTTONUP, 0, client_lparam);
+
+                        // Handle sys commands if we clicked buttons (Min/Max/Close)
+                        if wnd_cls_name(wnd) != "SysTreeView32" {
+                            let ret = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
+                            match ret {
+                                HTCLOSE => {
+                                    PostMessageA(wnd, WM_CLOSE, 0, 0);
+                                }
+                                HTMINBUTTON => {
+                                    PostMessageA(wnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+                                }
+                                HTMAXBUTTON => {
+                                    let mut placement: WINDOWPLACEMENT = zeroed();
+                                    placement.length = size_of::<WINDOWPLACEMENT>() as _;
+                                    GetWindowPlacement(wnd, &mut placement);
+                                    if placement.flags as i32 & SW_SHOWMAXIMIZED != 0 {
+                                        PostMessageA(wnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+                                    } else {
+                                        PostMessageA(wnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    MOUSEEVENTF_MIDDLEDOWN => {
+                        PostMessageA(client_wnd, WM_MBUTTONDOWN, MK_MBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_MIDDLEUP => {
+                        PostMessageA(client_wnd, WM_MBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_RIGHTDOWN => {
+                        SetForegroundWindow(root); // Focus on right click too
+                        PostMessageA(client_wnd, WM_RBUTTONDOWN, MK_RBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_RIGHTUP => {
+                        PostMessageA(client_wnd, WM_RBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_XDOWN => {
+                        PostMessageA(client_wnd, WM_MOUSEWHEEL, MK_RBUTTON, client_lparam);
+                    }
                     MOUSEEVENTF_HWHEEL => {
                         PostMessageA(
                             client_wnd,
@@ -574,18 +760,23 @@ impl KeyboardControllable for Enigo {
                         }
                     }
 
-                    let res = keybd_event(0, vk, 0);
-                    let err = if res == 0 { get_error() } else { "".to_owned() };
+                    unsafe {
+                        if GLOBAL_WND != 0 as _ {
+                            PostMessageA(GLOBAL_WND, WM_KEYDOWN, vk as usize, 0);
+                        } else {
+                            let res = keybd_event(0, vk, 0);
+                            let err = if res == 0 { get_error() } else { "".to_owned() };
+                            if !err.is_empty() {
+                                return Err(err.into());
+                            }
+                        }
+                    }
 
                     for pos in 0..mod_len {
                         let rpos = mod_len - 1 - pos;
                         if flag & (0x0001 << rpos) != 0 {
                             self.key_up(modifiers[pos]);
                         }
-                    }
-
-                    if !err.is_empty() {
-                        return Err(err.into());
                     }
                 } else {
                     return Err(format!("Failed to get keycode of {}", c).into());
@@ -596,11 +787,17 @@ impl KeyboardControllable for Enigo {
                 if code == 0 || code == 65535 {
                     return Err("".into());
                 }
-                let res = keybd_event(0, code, 0);
-                if res == 0 {
-                    let err = get_error();
-                    if !err.is_empty() {
-                        return Err(err.into());
+                unsafe {
+                    if GLOBAL_WND != 0 as _ {
+                        PostMessageA(GLOBAL_WND, WM_KEYDOWN, code as usize, 0);
+                    } else {
+                        let res = keybd_event(0, code, 0);
+                        if res == 0 {
+                            let err = get_error();
+                            if !err.is_empty() {
+                                return Err(err.into());
+                            }
+                        }
                     }
                 }
             }
@@ -609,7 +806,14 @@ impl KeyboardControllable for Enigo {
     }
 
     fn key_up(&mut self, key: Key) {
-        keybd_event(KEYEVENTF_KEYUP, self.key_to_keycode(key), 0);
+        let code = self.key_to_keycode(key);
+        unsafe {
+            if GLOBAL_WND != 0 as _ {
+                PostMessageA(GLOBAL_WND, WM_KEYUP, code as usize, 0);
+            } else {
+                keybd_event(KEYEVENTF_KEYUP, code, 0);
+            }
+        }
     }
 
     fn get_key_state(&mut self, key: Key) -> bool {
@@ -662,11 +866,23 @@ impl Enigo {
     }
 
     fn unicode_key_down(&self, unicode_char: u16) {
-        keybd_event(KEYEVENTF_UNICODE, 0, unicode_char);
+        unsafe {
+            if GLOBAL_WND != 0 as _ {
+                PostMessageA(GLOBAL_WND, WM_CHAR, unicode_char as _, 0);
+            } else {
+                keybd_event(KEYEVENTF_UNICODE, 0, unicode_char);
+            }
+        }
     }
 
     fn unicode_key_up(&self, unicode_char: u16) {
-        keybd_event(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, unicode_char);
+        // WM_CHAR handles the character input, explicit KeyUp is often not needed for WM_CHAR semantics 
+        // in basic automation, but for completeness or if fallback is used:
+        unsafe {
+            if GLOBAL_WND == 0 as _ {
+                keybd_event(KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0, unicode_char);
+            }
+        }
     }
 
     fn key_to_keycode(&self, key: Key) -> u16 {
