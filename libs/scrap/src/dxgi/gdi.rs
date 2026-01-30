@@ -117,8 +117,8 @@ impl CapturerGDI {
             } else {
                 println!("SetThreadDesktop success");
 
-                // Try to start cmd.exe instead of explorer.exe to avoid single-instance issue
-                let program = std::ffi::CString::new("cmd.exe").unwrap();
+                // Try to start notepad.exe to verify GUI window creation on hidden desktop
+                let program = std::ffi::CString::new("notepad.exe").unwrap();
                 let mut si: STARTUPINFOA = std::mem::zeroed();
                 si.cb = size_of::<STARTUPINFOA>() as _;
                 si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
@@ -139,11 +139,14 @@ impl CapturerGDI {
                 );
 
                 if res != 0 {
-                    println!("Started cmd.exe on hidden desktop. PID: {}", pi.dwProcessId);
+                    println!(
+                        "Started notepad.exe on hidden desktop. PID: {}",
+                        pi.dwProcessId
+                    );
                     winapi::um::handleapi::CloseHandle(pi.hProcess);
                     winapi::um::handleapi::CloseHandle(pi.hThread);
                 } else {
-                    println!("Failed to start cmd.exe, LastErr: {}", GetLastError());
+                    println!("Failed to start notepad.exe, LastErr: {}", GetLastError());
                 }
             }
 
