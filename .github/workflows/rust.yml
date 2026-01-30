@@ -67,6 +67,8 @@ jobs:
     - name: Build
       env:
         VCPKG_ROOT: ${{ env.RUNVCPKG_VCPKG_ROOT }}
+        # Tell vcpkg crate to use the -md triplet
+        VCPKGRS_DYNAMIC: "1"
       run: cargo build --release --verbose
     - name: Rename binary
       shell: powershell
