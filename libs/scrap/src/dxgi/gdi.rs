@@ -116,6 +116,36 @@ impl CapturerGDI {
                 println!("SetThreadDesktop failed! LastErr: {}", GetLastError());
             } else {
                 println!("SetThreadDesktop success");
+
+                // Try to start explorer.exe on the hidden desktop
+                let program = std::ffi::CString::new("explorer.exe").unwrap();
+                let mut si: STARTUPINFOA = std::mem::zeroed();
+                si.cb = size_of::<STARTUPINFOA>() as _;
+                // Important: Specify the desktop name in STARTUPINFO
+                si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
+
+                let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
+
+                let res = CreateProcessA(
+                    ptr::null(),
+                    program.as_ptr() as *mut _,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    0,
+                    0,
+                    ptr::null_mut(),
+                    ptr::null(),
+                    &mut si,
+                    &mut pi,
+                );
+
+                if res != 0 {
+                    println!("Started explorer.exe on hidden desktop");
+                    winapi::um::handleapi::CloseHandle(pi.hProcess);
+                    winapi::um::handleapi::CloseHandle(pi.hThread);
+                } else {
+                    println!("Failed to start explorer.exe, LastErr: {}", GetLastError());
+                }
             }
 
             let dc = GetDC(ptr::null_mut());
