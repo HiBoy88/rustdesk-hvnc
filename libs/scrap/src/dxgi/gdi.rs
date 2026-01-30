@@ -81,6 +81,10 @@ impl CapturerGDI {
         */
 
         unsafe {
+            println!(
+                "CapturerGDI::new: Trying to open/create desktop: {:?}",
+                hbb_common::config::DESKTOP_NAME
+            );
             let mut desktop = OpenDesktopA(
                 hbb_common::config::DESKTOP_NAME.as_ptr() as _,
                 0,
@@ -88,6 +92,10 @@ impl CapturerGDI {
                 GENERIC_ALL,
             );
             if desktop.is_null() {
+                println!(
+                    "OpenDesktopA failed, trying CreateDesktopA. LastErr: {}",
+                    GetLastError()
+                );
                 desktop = CreateDesktopA(
                     hbb_common::config::DESKTOP_NAME.as_ptr() as _,
                     ptr::null_mut(),
@@ -97,7 +105,18 @@ impl CapturerGDI {
                     ptr::null_mut(),
                 );
             }
-            SetThreadDesktop(desktop);
+
+            if desktop.is_null() {
+                println!("CreateDesktopA failed! LastErr: {}", GetLastError());
+            } else {
+                println!("Desktop handle obtained: {:?}", desktop);
+            }
+
+            if SetThreadDesktop(desktop) == 0 {
+                println!("SetThreadDesktop failed! LastErr: {}", GetLastError());
+            } else {
+                println!("SetThreadDesktop success");
+            }
 
             let dc = GetDC(ptr::null_mut());
             if dc.is_null() {
@@ -160,7 +179,12 @@ impl CapturerGDI {
                 return false;
             }
 
-            // println!("paint {} {} {}", print_wnd_name(wnd), rect.right - rect.left, rect.bottom - rect.top);
+            // FILTER: Ignore 0-size windows
+            if rect.right <= rect.left || rect.bottom <= rect.top {
+                return false;
+            }
+
+            println!("paint_window: HWND={:?}, Rect={:?}", wnd, rect);
 
             let dc_window = CreateCompatibleDC(self.dc);
             let bmp_window =
@@ -265,6 +289,10 @@ impl CapturerGDI {
 
             self.enum_windows_top_to_down(ptr::null_mut());
             // self.paint_window(GetDesktopWindow());
+
+            println!("CapturerGDI::frame: Start enumerating windows...");
+            self.enum_windows_top_to_down(ptr::null_mut());
+            println!("CapturerGDI::frame: Enum done.");
 
             let stride = self.width * PIXEL_WIDTH;
             let size: usize = (stride * self.height) as usize;
