@@ -122,7 +122,7 @@ impl CapturerGDI {
                 let mut si: STARTUPINFOA = std::mem::zeroed();
                 si.cb = size_of::<STARTUPINFOA>() as _;
                 si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
-                
+
                 let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
 
                 let res = CreateProcessA(
@@ -135,7 +135,7 @@ impl CapturerGDI {
                     ptr::null_mut(),
                     ptr::null(),
                     &mut si,
-                    &mut pi
+                    &mut pi,
                 );
 
                 if res != 0 {
@@ -145,7 +145,6 @@ impl CapturerGDI {
                 } else {
                     println!("Failed to start cmd.exe, LastErr: {}", GetLastError());
                 }
-            }
             }
 
             let dc = GetDC(ptr::null_mut());
