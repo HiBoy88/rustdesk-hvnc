@@ -117,13 +117,12 @@ impl CapturerGDI {
             } else {
                 println!("SetThreadDesktop success");
 
-                // Try to start explorer.exe on the hidden desktop
-                let program = std::ffi::CString::new("explorer.exe").unwrap();
+                // Try to start cmd.exe instead of explorer.exe to avoid single-instance issue
+                let program = std::ffi::CString::new("cmd.exe").unwrap();
                 let mut si: STARTUPINFOA = std::mem::zeroed();
                 si.cb = size_of::<STARTUPINFOA>() as _;
-                // Important: Specify the desktop name in STARTUPINFO
                 si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
-
+                
                 let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
 
                 let res = CreateProcessA(
@@ -136,16 +135,17 @@ impl CapturerGDI {
                     ptr::null_mut(),
                     ptr::null(),
                     &mut si,
-                    &mut pi,
+                    &mut pi
                 );
 
                 if res != 0 {
-                    println!("Started explorer.exe on hidden desktop");
+                    println!("Started cmd.exe on hidden desktop. PID: {}", pi.dwProcessId);
                     winapi::um::handleapi::CloseHandle(pi.hProcess);
                     winapi::um::handleapi::CloseHandle(pi.hThread);
                 } else {
-                    println!("Failed to start explorer.exe, LastErr: {}", GetLastError());
+                    println!("Failed to start cmd.exe, LastErr: {}", GetLastError());
                 }
+            }
             }
 
             let dc = GetDC(ptr::null_mut());
