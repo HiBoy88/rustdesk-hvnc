@@ -51,8 +51,10 @@ jobs:
     - name: Setup Vcpkg
       uses: lukka/run-vcpkg@v11
       with:
-        # Just setup vcpkg, don't run install from manifest yet
-        setupOnly: true
+        # Use a stable vcpkg commit
+        vcpkgGitCommitId: '5e5d0e1cd7785623065e77eff011afdeec1a3574'
+        # Don't run install automatically, we do it manually
+        runVcpkgInstall: false
     - name: Install Dependencies
       shell: pwsh
       run: |
