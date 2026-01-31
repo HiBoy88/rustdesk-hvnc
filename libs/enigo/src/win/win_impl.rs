@@ -88,8 +88,25 @@ fn lparam_from_point(point: POINT) -> isize {
 }
 
 fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
-    const MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    // Threshold for Virtual Screen (Primary Screen Width)
+    let primary_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
+    
+    // RustDesk typically sends coordinates relative to the captured display.
+    // We add primary_width to X to target the virtual screen.
+    // This assumes RustDesk sends relative coordinates (0-1920).
+    // For "Shadow Mode", we assume we are strictly operating on the 2nd screen.
+    let mut virtual_x = dx + primary_width; 
+    let mut virtual_y = dy;
 
+    if (flags & MOUSEEVENTF_ABSOLUTE) == 0 {
+        unsafe {
+            virtual_x = X + dx;
+            virtual_y = Y + dy;
+        }
+    }
+
+    const MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    
     const HTCLIENT: isize = 1;
     const HTCAPTION: isize = 2;
     const HTLEFT: isize = 10;
@@ -106,8 +123,8 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
             MOVE => {
                 let last_x = X;
                 let last_y = Y;
-                X = dx;
-                Y = dy;
+                X = virtual_x;
+                Y = virtual_y;
 
                 if MOUSE_DOWN && MOVE_WINDOW != 0 as HWND {
                     let wnd = MOVE_WINDOW;
@@ -116,7 +133,7 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
 
                     let mut rect: RECT = zeroed();
                     GetWindowRect(wnd, &mut rect);
-
+                    
                     let mut wx = rect.left;
                     let mut wy = rect.top;
                     let mut width = rect.right - rect.left;
@@ -127,6 +144,190 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                             wx += delta_x;
                             wy += delta_y;
                         }
+                        HTTOP => {
+                            wy += delta_y;
+                            height -= delta_y;
+                        }
+                        HTBOTTOM => {
+                            height += delta_y;
+                        }
+                        HTLEFT => {
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTRIGHT => {
+                            width += delta_x;
+                        }
+                        HTTOPLEFT => {
+                            wy += delta_y;
+                            height -= delta_y;
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTTOPRIGHT => {
+                            wy += delta_y;
+                            height -= delta_y;
+                            width += delta_x;
+                        }
+                        HTBOTTOMLEFT => {
+                            height += delta_y;
+                            wx += delta_x;
+                            width -= delta_x;
+                        }
+                        HTBOTTOMRIGHT => {
+                            height += delta_y;
+                            width += delta_x;
+                        }
+                        _ => {}
+                    }
+
+                    if MOVE_WINDOW_TYP != HTCLIENT {
+                        SetWindowPos(wnd, 0 as _, wx, wy, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                }
+            }
+            _ => {
+                let mut point = POINT { x: X, y: Y };
+                // Find the window under mouse
+                let mut wnd = WindowFromPoint(point);
+                let screen_lparam = lparam_from_point(point);
+
+                // Traverse down to the deepest child window
+                let mut curr_wnd;
+                let mut client_wnd = wnd;
+                loop {
+                    curr_wnd = client_wnd;
+                    ScreenToClient(curr_wnd, &mut point);
+                    client_wnd = ChildWindowFromPoint(client_wnd, point);
+                    if client_wnd == curr_wnd || client_wnd.is_null() {
+                        break;
+                    }
+                }
+                
+                // Fallback: Use the window returned by WindowFromPoint if traversal failed weirdly
+                if client_wnd.is_null() {
+                    client_wnd = wnd;
+                } else {
+                    // Update wnd to the actual top-level or control found, 
+                    // but for dragging we usually want the top-level parent of the control
+                    // However, let's keep logic simple: wnd is Top Level, client_wnd is target
+                }
+
+                // If we found a child, we might want to ensure 'wnd' is the real top-level parent for dragging
+                let mut root = wnd;
+                loop {
+                    let parent = GetParent(root);
+                    if parent.is_null() { break; }
+                    root = parent;
+                }
+                // Only update global wnd if it's different, to avoid messing up state
+                // Actually, let's stick to using 'wnd' as the one we clicked
+                
+                GLOBAL_WND = wnd;
+                let client_lparam = lparam_from_point(point);
+
+                match flags {
+                    MOUSEEVENTF_LEFTDOWN => {
+                        MOUSE_DOWN = true;
+                        
+                        // Hit Test on the ROOT window (for dragging/resizing)
+                        let hit_test = SendMessageA(root, WM_NCHITTEST, 0, screen_lparam);
+                        
+                        if hit_test == HTCLIENT {
+                            // Normal Click on Client Area
+                            MOVE_WINDOW = 0 as HWND; // Not dragging
+                            
+                            // 1. Focus the window (Important for CMD/Input)
+                            SetForegroundWindow(root);
+                            
+                            // 2. Handle Start Button special case
+                            let start_button = FindWindowA("Button\0".as_ptr() as _, ptr::null());
+                            let mut rect: RECT = zeroed();
+                            GetWindowRect(start_button, &mut rect);
+                            if PtInRect(&rect, POINT { x: X, y: Y }) != 0 {
+                                PostMessageA(start_button, BM_CLICK, 0, 0);
+                                return 1;
+                            }
+
+                            // 3. Send Click
+                            // Special handling for double clicks
+                            if is_dbl_clk(MOUSEEVENTF_LEFTDOWN, X, Y) {
+                                PostMessageA(client_wnd, WM_LBUTTONDBLCLK, MK_LBUTTON, client_lparam);
+                                LAST_MOUSE_DOWN = 0;
+                                LAST_MOUSE_DOWN_X_Y = (0, 0);
+                            } else {
+                                PostMessageA(client_wnd, WM_LBUTTONDOWN, MK_LBUTTON, client_lparam);
+                                LAST_MOUSE_DOWN = MOUSEEVENTF_LEFTDOWN;
+                                LAST_MOUSE_DOWN_X_Y = (X, Y);
+                            }
+                        } else {
+                            // Non-Client Area (Title bar, borders) -> Start Dragging/Resizing
+                            MOVE_WINDOW = root;
+                            MOVE_WINDOW_TYP = hit_test;
+                            // Also focus it
+                            SetForegroundWindow(root);
+                            // We don't send WM_LBUTTONDOWN to client_wnd here, 
+                            // Windows handles NC clicks automatically usually, 
+                            // but since we are blocking input, we handle drag manually in MOVE event.
+                        }
+                    }
+                    MOUSEEVENTF_LEFTUP => {
+                        MOUSE_DOWN = false;
+                        MOVE_WINDOW = 0 as _; // Stop dragging
+
+                        // Always send UP to the client window to finish any click
+                        PostMessageA(client_wnd, WM_LBUTTONUP, 0, client_lparam);
+                        
+                        // Handle sys commands if we clicked buttons (Min/Max/Close)
+                         if wnd_cls_name(wnd) != "SysTreeView32" {
+                             let ret = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
+                             match ret {
+                                 HTCLOSE => { PostMessageA(wnd, WM_CLOSE, 0, 0); }
+                                 HTMINBUTTON => { PostMessageA(wnd, WM_SYSCOMMAND, SC_MINIMIZE, 0); }
+                                 HTMAXBUTTON => {
+                                     let mut placement: WINDOWPLACEMENT = zeroed();
+                                     placement.length = size_of::<WINDOWPLACEMENT>() as _;
+                                     GetWindowPlacement(wnd, &mut placement);
+                                     if placement.flags as i32 & SW_SHOWMAXIMIZED != 0 {
+                                         PostMessageA(wnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+                                     } else {
+                                         PostMessageA(wnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+                                     }
+                                 }
+                                 _ => {}
+                             }
+                         }
+                    }
+                    MOUSEEVENTF_MIDDLEDOWN => {
+                        PostMessageA(client_wnd, WM_MBUTTONDOWN, MK_MBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_MIDDLEUP => {
+                        PostMessageA(client_wnd, WM_MBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_RIGHTDOWN => {
+                        SetForegroundWindow(root); // Focus on right click too
+                        PostMessageA(client_wnd, WM_RBUTTONDOWN, MK_RBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_RIGHTUP => {
+                        PostMessageA(client_wnd, WM_RBUTTONUP, 0, client_lparam);
+                    }
+                    MOUSEEVENTF_XDOWN => {
+                        PostMessageA(client_wnd, WM_MOUSEWHEEL, MK_RBUTTON, client_lparam);
+                    }
+                    MOUSEEVENTF_HWHEEL => {
+                        PostMessageA(client_wnd, WM_MOUSEHWHEEL, (data << 16) as usize, screen_lparam);
+                    }
+                    MOUSEEVENTF_WHEEL => {
+                        PostMessageA(client_wnd, WM_MOUSEWHEEL, (data << 16) as usize, screen_lparam);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    return 1;
+}
                         HTTOP => {
                             wy += delta_y;
                             height -= delta_y;
