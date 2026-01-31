@@ -257,29 +257,41 @@ impl CapturerGDI {
                 return false;
             }
 
-            // We reuse self.cache_dc which already has self.cache_bmp selected.
-            // The cache_bmp is initialized to screen width/height, so it should be big enough for any window
-            // smaller than the screen. If a window is larger, it might clip, but that's acceptable for now.
-
-            // Try PW_RENDERFULLCONTENT (0x02) first for better capture (e.g. Chrome), then fallback
-            if PrintWindow(wnd, self.cache_dc, 0x00000002) != 0
-                || PrintWindow(wnd, self.cache_dc, 0) != 0
-            {
-                if 0 == BitBlt(
-                    self.screen_dc,
-                    rect.left,
-                    rect.top,
-                    w,
-                    h,
-                    self.cache_dc,
-                    0,
-                    0,
-                    SRCCOPY | CAPTUREBLT,
-                ) {
-                    // println!("bitble");
+            // FILTER: Skip Program Manager and WorkerW (Desktop Background) to prevent lag
+            // Also these windows usually don't render correctly in HVNC anyway
+            let mut class_name = [0u8; 256];
+            let len =
+                winapi::um::winuser::GetClassNameA(wnd, class_name.as_mut_ptr() as *mut i8, 255);
+            if len > 0 {
+                let name = std::str::from_utf8(&class_name[..len as usize]).unwrap_or("");
+                if name == "Progman" || name == "WorkerW" {
+                    return false;
                 }
 
-                ret = true;
+                // PERFORMANCE: Only use PW_RENDERFULLCONTENT for browser windows
+                // It is much slower than default capturing
+                let flags = if name == "Chrome_WidgetWin_1" {
+                    0x00000002 // PW_RENDERFULLCONTENT
+                } else {
+                    0 // Default
+                };
+
+                if PrintWindow(wnd, self.cache_dc, flags) != 0 {
+                    if 0 == BitBlt(
+                        self.screen_dc,
+                        rect.left,
+                        rect.top,
+                        w,
+                        h,
+                        self.cache_dc,
+                        0,
+                        0,
+                        SRCCOPY | CAPTUREBLT,
+                    ) {
+                        // failed
+                    }
+                    ret = true;
+                }
             }
         }
 
@@ -337,9 +349,20 @@ impl CapturerGDI {
 
     pub fn frame(&self, data: &mut Vec<u8>) -> Result<(), Box<dyn std::error::Error>> {
         unsafe {
-            // println!("CapturerGDI::frame: Start enumerating windows...");
+            // STEP 1: Fill background with solid gray color to avoid "black screen" confusion
+            // and clear artifacts from previous frames
+            let brush = winapi::um::wingdi::CreateSolidBrush(0x00404040); // Dark Gray
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: self.width,
+                bottom: self.height,
+            };
+            winapi::um::winuser::FillRect(self.screen_dc, &rect, brush);
+            winapi::um::wingdi::DeleteObject(brush as _);
+
+            // STEP 2: Draw windows from bottom to top
             self.enum_windows_top_to_down(ptr::null_mut());
-            // println!("CapturerGDI::frame: Enum done.");
 
             let stride = self.width * PIXEL_WIDTH;
             let size: usize = (stride * self.height) as usize;

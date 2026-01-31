@@ -90,12 +90,12 @@ fn lparam_from_point(point: POINT) -> isize {
 fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
     // Threshold for Virtual Screen (Primary Screen Width)
     let primary_width = unsafe { GetSystemMetrics(SM_CXSCREEN) };
-    
+
     // RustDesk typically sends coordinates relative to the captured display.
     // We add primary_width to X to target the virtual screen.
     // This assumes RustDesk sends relative coordinates (0-1920).
     // For "Shadow Mode", we assume we are strictly operating on the 2nd screen.
-    let mut virtual_x = dx + primary_width; 
+    let mut virtual_x = dx + primary_width;
     let mut virtual_y = dy;
 
     if (flags & MOUSEEVENTF_ABSOLUTE) == 0 {
@@ -106,7 +106,7 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
     }
 
     const MOVE: u32 = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-    
+
     const HTCLIENT: isize = 1;
     const HTCAPTION: isize = 2;
     const HTLEFT: isize = 10;
@@ -133,7 +133,7 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
 
                     let mut rect: RECT = zeroed();
                     GetWindowRect(wnd, &mut rect);
-                    
+
                     let mut wx = rect.left;
                     let mut wy = rect.top;
                     let mut width = rect.right - rect.left;
@@ -182,7 +182,15 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                     }
 
                     if MOVE_WINDOW_TYP != HTCLIENT {
-                        SetWindowPos(wnd, 0 as _, wx, wy, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+                        SetWindowPos(
+                            wnd,
+                            0 as _,
+                            wx,
+                            wy,
+                            width,
+                            height,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
                     }
                 }
             }
@@ -203,12 +211,12 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                         break;
                     }
                 }
-                
+
                 // Fallback: Use the window returned by WindowFromPoint if traversal failed weirdly
                 if client_wnd.is_null() {
                     client_wnd = wnd;
                 } else {
-                    // Update wnd to the actual top-level or control found, 
+                    // Update wnd to the actual top-level or control found,
                     // but for dragging we usually want the top-level parent of the control
                     // However, let's keep logic simple: wnd is Top Level, client_wnd is target
                 }
@@ -217,29 +225,31 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                 let mut root = wnd;
                 loop {
                     let parent = GetParent(root);
-                    if parent.is_null() { break; }
+                    if parent.is_null() {
+                        break;
+                    }
                     root = parent;
                 }
                 // Only update global wnd if it's different, to avoid messing up state
                 // Actually, let's stick to using 'wnd' as the one we clicked
-                
+
                 GLOBAL_WND = wnd;
                 let client_lparam = lparam_from_point(point);
 
                 match flags {
                     MOUSEEVENTF_LEFTDOWN => {
                         MOUSE_DOWN = true;
-                        
+
                         // Hit Test on the ROOT window (for dragging/resizing)
                         let hit_test = SendMessageA(root, WM_NCHITTEST, 0, screen_lparam);
-                        
+
                         if hit_test == HTCLIENT {
                             // Normal Click on Client Area
                             MOVE_WINDOW = 0 as HWND; // Not dragging
-                            
+
                             // 1. Focus the window (Important for CMD/Input)
                             SetForegroundWindow(root);
-                            
+
                             // 2. Handle Start Button special case
                             let start_button = FindWindowA("Button\0".as_ptr() as _, ptr::null());
                             let mut rect: RECT = zeroed();
@@ -252,7 +262,12 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                             // 3. Send Click
                             // Special handling for double clicks
                             if is_dbl_clk(MOUSEEVENTF_LEFTDOWN, X, Y) {
-                                PostMessageA(client_wnd, WM_LBUTTONDBLCLK, MK_LBUTTON, client_lparam);
+                                PostMessageA(
+                                    client_wnd,
+                                    WM_LBUTTONDBLCLK,
+                                    MK_LBUTTON,
+                                    client_lparam,
+                                );
                                 LAST_MOUSE_DOWN = 0;
                                 LAST_MOUSE_DOWN_X_Y = (0, 0);
                             } else {
@@ -266,8 +281,8 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                             MOVE_WINDOW_TYP = hit_test;
                             // Also focus it
                             SetForegroundWindow(root);
-                            // We don't send WM_LBUTTONDOWN to client_wnd here, 
-                            // Windows handles NC clicks automatically usually, 
+                            // We don't send WM_LBUTTONDOWN to client_wnd here,
+                            // Windows handles NC clicks automatically usually,
                             // but since we are blocking input, we handle drag manually in MOVE event.
                         }
                     }
@@ -277,26 +292,30 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
 
                         // Always send UP to the client window to finish any click
                         PostMessageA(client_wnd, WM_LBUTTONUP, 0, client_lparam);
-                        
+
                         // Handle sys commands if we clicked buttons (Min/Max/Close)
-                         if wnd_cls_name(wnd) != "SysTreeView32" {
-                             let ret = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
-                             match ret {
-                                 HTCLOSE => { PostMessageA(wnd, WM_CLOSE, 0, 0); }
-                                 HTMINBUTTON => { PostMessageA(wnd, WM_SYSCOMMAND, SC_MINIMIZE, 0); }
-                                 HTMAXBUTTON => {
-                                     let mut placement: WINDOWPLACEMENT = zeroed();
-                                     placement.length = size_of::<WINDOWPLACEMENT>() as _;
-                                     GetWindowPlacement(wnd, &mut placement);
-                                     if placement.flags as i32 & SW_SHOWMAXIMIZED != 0 {
-                                         PostMessageA(wnd, WM_SYSCOMMAND, SC_RESTORE, 0);
-                                     } else {
-                                         PostMessageA(wnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
-                                     }
-                                 }
-                                 _ => {}
-                             }
-                         }
+                        if wnd_cls_name(wnd) != "SysTreeView32" {
+                            let ret = SendMessageA(wnd, WM_NCHITTEST, 0, screen_lparam);
+                            match ret {
+                                HTCLOSE => {
+                                    PostMessageA(wnd, WM_CLOSE, 0, 0);
+                                }
+                                HTMINBUTTON => {
+                                    PostMessageA(wnd, WM_SYSCOMMAND, SC_MINIMIZE, 0);
+                                }
+                                HTMAXBUTTON => {
+                                    let mut placement: WINDOWPLACEMENT = zeroed();
+                                    placement.length = size_of::<WINDOWPLACEMENT>() as _;
+                                    GetWindowPlacement(wnd, &mut placement);
+                                    if placement.flags as i32 & SW_SHOWMAXIMIZED != 0 {
+                                        PostMessageA(wnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+                                    } else {
+                                        PostMessageA(wnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     MOUSEEVENTF_MIDDLEDOWN => {
                         PostMessageA(client_wnd, WM_MBUTTONDOWN, MK_MBUTTON, client_lparam);
@@ -315,10 +334,20 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
                         PostMessageA(client_wnd, WM_MOUSEWHEEL, MK_RBUTTON, client_lparam);
                     }
                     MOUSEEVENTF_HWHEEL => {
-                        PostMessageA(client_wnd, WM_MOUSEHWHEEL, (data << 16) as usize, screen_lparam);
+                        PostMessageA(
+                            client_wnd,
+                            WM_MOUSEHWHEEL,
+                            (data << 16) as usize,
+                            screen_lparam,
+                        );
                     }
                     MOUSEEVENTF_WHEEL => {
-                        PostMessageA(client_wnd, WM_MOUSEWHEEL, (data << 16) as usize, screen_lparam);
+                        PostMessageA(
+                            client_wnd,
+                            WM_MOUSEWHEEL,
+                            (data << 16) as usize,
+                            screen_lparam,
+                        );
                     }
                     _ => {}
                 }
@@ -327,7 +356,7 @@ fn mouse_event(flags: u32, data: u32, dx: i32, dy: i32) -> DWORD {
     }
 
     return 1;
-}                    let delta_x = X - last_x;
+}
 fn keybd_event(mut flags: u32, vk: u16, scan: u16) -> DWORD {
     // let mut scan = scan;
     // unsafe {
